@@ -107,15 +107,34 @@ const procs = new Map();
 /** @type {Set<http.ServerResponse>} */
 const clients = new Set();
 
-const sniffer = new Sniffer();
+/** متصفح مستقلّ لكل مستخدم — منفذ تنقيح وملف تعريف خاصّان */
+const sniffers = new Map();
 
-function broadcast(event, data) {
+function snifferFor(uid) {
+  let s = sniffers.get(uid);
+  if (!s) {
+    s = new Sniffer({
+      id: uid,
+      port: 9333 + sniffers.size + 1,
+      profileDir: path.join(STATE_DIR, 'browsers', uid),
+      cookieFile: path.join(STATE_DIR, 'browsers', uid, 'cookies.txt'),
+    });
+    sniffers.set(uid, s);
+  }
+  return s;
+}
+
+const activeBrowsers = () => [...sniffers.values()].filter((s) => s.active).length;
+
+function broadcast(event, data, uid) {
   const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
-  for (const res of clients) {
+  for (const c of clients) {
+    // لا يتسرّب حدث مستخدم إلى شاشة غيره
+    if (uid && c.uid !== uid) continue;
     try {
-      res.write(payload);
+      c.res.write(payload);
     } catch {
-      clients.delete(res);
+      clients.delete(c);
     }
   }
 }
@@ -131,7 +150,7 @@ function updateJob(job, patch) {
   // نخفّف البث أثناء التقدّم فقط، أما تغيّر الحالة فيُبثّ فورًا
   if (patch.status === undefined && now - (job._lastEmit || 0) < 220) return;
   job._lastEmit = now;
-  broadcast('job', publicJob(job));
+  broadcast('job', publicJob(job), job.userId);
 }
 
 // --------------------------------------------------------- بناء أوامر yt-dlp ---
@@ -246,7 +265,7 @@ function buildDownloadArgs(job) {
     : null;
 
   const out = path.join(
-    config.downloadDir,
+    job.dir || config.downloadDir,
     o.playlist ? '%(playlist_title|)s' : '',
     explicit
       ? `${explicit.replace(/%/g, '%%')}${suffix}.%(ext)s`
@@ -336,7 +355,7 @@ function startJob(job) {
   const args = buildDownloadArgs(job);
   updateJob(job, { status: 'running', phase: 'جارٍ البدء…', startedAt: Date.now() });
 
-  const proc = spawn(tools.ytdlp, args, { cwd: config.downloadDir });
+  const proc = spawn(tools.ytdlp, args, { cwd: job.dir || config.downloadDir });
   procs.set(job.id, proc);
 
   // مدة البث تُمكّننا من حساب النسبة من زمن ffmpeg
@@ -475,7 +494,7 @@ function startJob(job) {
   proc.on('close', (code, signal) => {
     procs.delete(job.id);
     if (job.status === 'canceled') {
-      broadcast('job', publicJob(job));
+      broadcast('job', publicJob(job), job.userId);
       pump();
       return;
     }
@@ -496,7 +515,7 @@ function startJob(job) {
         raw: stderrTail,
       });
     }
-    broadcast('job', publicJob(job));
+    broadcast('job', publicJob(job), job.userId);
     pump();
   });
 }
@@ -679,8 +698,49 @@ function serveStatic(req, res, urlPath) {
  * تُطبَّق على كل المسارات بلا استثناء: عند التشغيل عبر نفق (Cloudflare مثلًا)
  * تصل الطلبات من 127.0.0.1، فلا يصحّ اعتبار «المحلي» موثوقًا.
  */
-/** جلسات صالحة في الذاكرة — تُمسح عند إعادة تشغيل الخادم */
-const sessions = new Set();
+// ---------------------------------------------------------- المستخدمون ---
+
+const STATE_DIR = process.env.DAWN_STATE_DIR || config.downloadDir;
+const USERS_PATH = path.join(STATE_DIR, 'users.json');
+const OWNER_ID = 'owner';
+const MAX_BROWSERS = Number(process.env.DAWN_MAX_BROWSERS || 2);
+
+/** @type {Map<string, {id,name,key,createdAt}>} */
+const users = new Map();
+
+function loadUsers() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(USERS_PATH, 'utf8'));
+    for (const u of raw.users || []) users.set(u.id, u);
+  } catch {
+    /* أول تشغيل */
+  }
+}
+
+function saveUsers() {
+  fs.mkdirSync(STATE_DIR, { recursive: true });
+  fs.writeFileSync(USERS_PATH, JSON.stringify({ users: [...users.values()] }, null, 2), {
+    mode: 0o600,
+  });
+}
+
+function userByKey(key) {
+  if (!key) return null;
+  const given = Buffer.from(String(key), 'utf8');
+  for (const u of users.values()) {
+    const b = Buffer.from(u.key, 'utf8');
+    if (given.length === b.length && timingSafeEqual(given, b)) return u;
+  }
+  return null;
+}
+
+/** مجلد تحميل خاص بكل مستخدم — لا يرى أحد ملفات غيره */
+function userDir(uid) {
+  return uid === OWNER_ID ? config.downloadDir : path.join(config.downloadDir, 'u', uid);
+}
+
+/** جلسات صالحة في الذاكرة: الرمز → معرّف المستخدم */
+const sessions = new Map();
 
 function parseCookies(req) {
   const out = {};
@@ -702,23 +762,28 @@ function passwordOK(given) {
   return timingSafeEqual(a, b);
 }
 
-function authOK(req) {
-  if (!process.env.DAWN_PASSWORD) return true; // استخدام محلي بلا كلمة مرور
+/** يرجع معرّف المستخدم صاحب الطلب، أو null إن لم يكن مصرّحًا له */
+function whoIs(req) {
+  if (!process.env.DAWN_PASSWORD) return OWNER_ID; // استخدام محلي بلا كلمة مرور
 
-  // ملفّ تعريف الجلسة: يُرسَل تلقائيًا مع fetch وEventSource
   const token = parseCookies(req).dawn_session;
-  if (token && sessions.has(token)) return true;
+  if (token && sessions.has(token)) return sessions.get(token);
 
   // Basic مقبولة أيضًا لتسهيل الاستخدام من الطرفية (curl)
   const m = /^Basic\s+(.+)$/i.exec(req.headers.authorization || '');
-  if (!m) return false;
-  try {
-    const decoded = Buffer.from(m[1], 'base64').toString('utf8');
-    const i = decoded.indexOf(':');
-    return passwordOK(i >= 0 ? decoded.slice(i + 1) : '');
-  } catch {
-    return false;
+  if (m) {
+    try {
+      const decoded = Buffer.from(m[1], 'base64').toString('utf8');
+      const i = decoded.indexOf(':');
+      const secret = i >= 0 ? decoded.slice(i + 1) : '';
+      if (passwordOK(secret)) return OWNER_ID;
+      const u = userByKey(secret);
+      if (u) return u.id;
+    } catch {
+      /* غير صالح */
+    }
   }
+  return null;
 }
 
 const isHttpUrl = (u) => {
@@ -737,11 +802,18 @@ const server = http.createServer(async (req, res) => {
   // مسارات الدخول متاحة قبل البوابة
   if (p === '/api/login' && req.method === 'POST') {
     const body = await readBody(req).catch(() => ({}));
-    if (!passwordOK(body.password)) {
-      return sendJSON(res, 401, { error: 'كلمة المرور غير صحيحة' });
+    const secret = body.password;
+
+    let uid = null;
+    if (passwordOK(secret)) uid = OWNER_ID;
+    else {
+      const u = userByKey(secret);
+      if (u) uid = u.id;
     }
+    if (!uid) return sendJSON(res, 401, { error: 'كلمة المرور أو مفتاح الدخول غير صحيح' });
+
     const token = randomUUID() + randomUUID();
-    sessions.add(token);
+    sessions.set(token, uid);
     const secure = req.headers['x-forwarded-proto'] === 'https' ? '; Secure' : '';
     res.writeHead(200, {
       'Set-Cookie': `dawn_session=${token}; HttpOnly; Path=/; SameSite=Lax; Max-Age=604800${secure}`,
@@ -752,6 +824,21 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (p === '/login') {
+    const key = url.searchParams.get('key');
+    if (key) {
+      const u = userByKey(key);
+      if (u) {
+        const token = randomUUID() + randomUUID();
+        sessions.set(token, u.id);
+        const secure = req.headers['x-forwarded-proto'] === 'https' ? '; Secure' : '';
+        res.writeHead(302, {
+          Location: '/',
+          'Set-Cookie': `dawn_session=${token}; HttpOnly; Path=/; SameSite=Lax; Max-Age=604800${secure}`,
+          'Cache-Control': 'no-store',
+        });
+        return res.end();
+      }
+    }
     if (!process.env.DAWN_PASSWORD) {
       res.writeHead(302, { Location: '/' });
       return res.end();
@@ -759,7 +846,8 @@ const server = http.createServer(async (req, res) => {
     return serveStatic(req, res, '/login.html');
   }
 
-  if (!authOK(req)) {
+  const uid = whoIs(req);
+  if (!uid) {
     // التصفّح العادي يُحوَّل لصفحة الدخول؛ لا نستخدم نافذة Basic لأن
     // تضمين البيانات في الرابط يعطّل كل طلبات fetch في الصفحة.
     if (String(req.headers.accept || '').includes('text/html')) {
@@ -768,6 +856,9 @@ const server = http.createServer(async (req, res) => {
     }
     return sendJSON(res, 401, { error: 'غير مصرّح' });
   }
+  const isOwner = uid === OWNER_ID;
+  const sniffer = snifferFor(uid);
+  const myDir = userDir(uid);
 
   try {
     // ------------------------------------------------------------- SSE ---
@@ -780,14 +871,16 @@ const server = http.createServer(async (req, res) => {
       // حشوة أولية تدفع الوسطاء لتمرير البث بدل تخزينه مؤقتًا
       res.write(':' + ' '.repeat(2048) + '\n\n');
       res.write(': connected\n\n');
-      res.write(`event: snapshot\ndata: ${JSON.stringify([...jobs.values()].map(publicJob))}\n\n`);
+      const mine = () => [...jobs.values()].filter((j) => j.userId === uid).map(publicJob);
+      res.write(`event: snapshot\ndata: ${JSON.stringify(mine())}\n\n`);
       res.write(
         `event: sniff-snapshot\ndata: ${JSON.stringify({
           active: sniffer.active,
           items: sniffer.list(),
         })}\n\n`
       );
-      clients.add(res);
+      const client = { res, uid };
+      clients.add(client);
       const ka = setInterval(() => {
         try {
           res.write(': ka\n\n');
@@ -797,7 +890,7 @@ const server = http.createServer(async (req, res) => {
       }, 20000);
       req.on('close', () => {
         clearInterval(ka);
-        clients.delete(res);
+        clients.delete(client);
       });
       return;
     }
@@ -808,7 +901,7 @@ const server = http.createServer(async (req, res) => {
     if (p === '/api/file') {
       const want = url.searchParams.get('path') || '';
       const target = path.resolve(want);
-      const root = path.resolve(config.downloadDir);
+      const root = path.resolve(myDir);
 
       // منع الخروج خارج مجلد التحميلات (path traversal)
       if (target !== root && !target.startsWith(root + path.sep)) {
@@ -836,13 +929,47 @@ const server = http.createServer(async (req, res) => {
 
     if (p === '/api/state') {
       return sendJSON(res, 200, {
-        jobs: [...jobs.values()].map(publicJob),
+        jobs: [...jobs.values()].filter((j) => j.userId === uid).map(publicJob),
         sniff: {
           active: sniffer.active,
           items: sniffer.list(),
           view: sniffer.frame ? { w: sniffer.frame.w, h: sniffer.frame.h } : null,
         },
       });
+    }
+
+    if (p === '/api/users') {
+      if (!isOwner) return sendJSON(res, 403, { error: 'للمالك فقط' });
+
+      if (req.method === 'POST') {
+        const body = await readBody(req);
+        const name = String(body.name || '').trim().slice(0, 40);
+        if (!name) return sendJSON(res, 400, { error: 'اكتب اسمًا' });
+        const u = {
+          id: randomUUID().slice(0, 8),
+          name,
+          key: randomUUID().replace(/-/g, '') + randomUUID().replace(/-/g, '').slice(0, 8),
+          createdAt: Date.now(),
+        };
+        users.set(u.id, u);
+        saveUsers();
+        return sendJSON(res, 200, { user: u });
+      }
+
+      if (req.method === 'DELETE') {
+        const body = await readBody(req);
+        const u = users.get(String(body.id || ''));
+        if (!u) return sendJSON(res, 404, { error: 'غير موجود' });
+        users.delete(u.id);
+        saveUsers();
+        // نُنهي جلساته الحالية فورًا
+        for (const [tok, owner] of [...sessions]) if (owner === u.id) sessions.delete(tok);
+        const s2 = sniffers.get(u.id);
+        if (s2) { Promise.resolve(s2.stop()).catch(() => {}); sniffers.delete(u.id); }
+        return sendJSON(res, 200, { ok: true });
+      }
+
+      return sendJSON(res, 200, { users: [...users.values()] });
     }
 
     if (p === '/api/health') {
@@ -854,8 +981,9 @@ const server = http.createServer(async (req, res) => {
         ffmpeg: !!tools.ffmpeg,
         ffmpegPath: tools.ffmpeg,
         browser: findBrowser()?.name || null,
-        downloadDir: config.downloadDir,
+        downloadDir: myDir,
         platform: process.platform,
+        user: { id: uid, owner: isOwner, name: users.get(uid)?.name || 'المالك' },
         remote: IS_REMOTE, // الواجهة تعرض «حفظ على جهازي» بدل «إظهار في المجلد»
       });
     }
@@ -887,12 +1015,17 @@ const server = http.createServer(async (req, res) => {
       const target = String(body.url || '').trim();
       if (!isHttpUrl(target)) return sendJSON(res, 400, { error: 'رابط غير صالح' });
 
+      if (!sniffer.active && activeBrowsers() >= MAX_BROWSERS) {
+        return sendJSON(res, 429, {
+          error: `الحد الأقصى ${MAX_BROWSERS} متصفح في وقت واحد. انتظر حتى ينهي مستخدم آخر استخراجه.`,
+        });
+      }
       sniffer.clear();
-      broadcast('sniff-reset', {});
+      broadcast('sniff-reset', {}, uid);
       const info = await sniffer.start(target, {
         embedded: body.embedded !== false, // العرض المدمج هو الافتراضي
-        onMedia: (item) => broadcast('sniff-media', item),
-        onStatus: (message) => broadcast('sniff-status', { message, active: sniffer.active }),
+        onMedia: (item) => broadcast('sniff-media', item, uid),
+        onStatus: (message) => broadcast('sniff-status', { message, active: sniffer.active }, uid),
       });
       return sendJSON(res, 200, { ok: true, ...info });
     }
@@ -922,7 +1055,7 @@ const server = http.createServer(async (req, res) => {
 
     if (p === '/api/sniff/stop' && req.method === 'POST') {
       await sniffer.stop();
-      broadcast('sniff-status', { message: 'توقّف الاستخراج', active: false });
+      broadcast('sniff-status', { message: 'توقّف الاستخراج', active: false }, uid);
       return sendJSON(res, 200, { ok: true });
     }
 
@@ -993,12 +1126,14 @@ const server = http.createServer(async (req, res) => {
       const valid = urls.filter(isHttpUrl);
       if (!valid.length) return sendJSON(res, 400, { error: 'لا يوجد رابط صالح' });
 
-      await fsp.mkdir(config.downloadDir, { recursive: true });
+      await fsp.mkdir(myDir, { recursive: true });
 
       const created = [];
       for (const u of valid) {
         const job = {
           id: randomUUID(),
+          userId: uid,
+          dir: myDir,
           url: u,
           title: body.title && valid.length === 1 ? body.title : u,
           thumbnail: valid.length === 1 ? body.thumbnail || null : null,
@@ -1034,7 +1169,7 @@ const server = http.createServer(async (req, res) => {
         jobs.set(job.id, job);
         queue.push(job.id);
         created.push(publicJob(job));
-        broadcast('job', publicJob(job));
+        broadcast('job', publicJob(job), job.userId);
       }
       pump();
       return sendJSON(res, 200, { jobs: created });
@@ -1043,13 +1178,13 @@ const server = http.createServer(async (req, res) => {
     if (p === '/api/cancel' && req.method === 'POST') {
       const { id } = await readBody(req);
       const job = jobs.get(id);
-      if (!job) return sendJSON(res, 404, { error: 'غير موجود' });
+      if (!job || job.userId !== uid) return sendJSON(res, 404, { error: 'غير موجود' });
       const idx = queue.indexOf(id);
       if (idx >= 0) queue.splice(idx, 1);
       const proc = procs.get(id);
       updateJob(job, { status: 'canceled', phase: 'أُلغي', speed: null, eta: null });
       if (proc) proc.kill('SIGTERM');
-      broadcast('job', publicJob(job));
+      broadcast('job', publicJob(job), job.userId);
       pump();
       return sendJSON(res, 200, { ok: true });
     }
@@ -1057,29 +1192,30 @@ const server = http.createServer(async (req, res) => {
     if (p === '/api/retry' && req.method === 'POST') {
       const { id } = await readBody(req);
       const job = jobs.get(id);
-      if (!job) return sendJSON(res, 404, { error: 'غير موجود' });
+      if (!job || job.userId !== uid) return sendJSON(res, 404, { error: 'غير موجود' });
       if (job.status === 'running') return sendJSON(res, 400, { error: 'قيد التنفيذ' });
       updateJob(job, { status: 'queued', phase: 'في الانتظار', percent: 0, error: null, files: [] });
       queue.push(job.id);
-      broadcast('job', publicJob(job));
+      broadcast('job', publicJob(job), job.userId);
       pump();
       return sendJSON(res, 200, { ok: true });
     }
 
     if (p === '/api/clear' && req.method === 'POST') {
       for (const [id, j] of [...jobs]) {
+        if (j.userId !== uid) continue;
         if (j.status !== 'running' && j.status !== 'queued') jobs.delete(id);
       }
-      broadcast('snapshot', [...jobs.values()].map(publicJob));
+      broadcast('snapshot', [...jobs.values()].filter((j) => j.userId === uid).map(publicJob), uid);
       return sendJSON(res, 200, { ok: true });
     }
 
     if (p === '/api/open' && req.method === 'POST') {
       const body = await readBody(req);
-      let target = body.path ? String(body.path) : config.downloadDir;
+      let target = body.path ? String(body.path) : myDir;
       const reveal = !!body.reveal;
-      if (!fs.existsSync(target)) target = config.downloadDir;
-      await fsp.mkdir(config.downloadDir, { recursive: true });
+      if (!fs.existsSync(target)) target = myDir;
+      await fsp.mkdir(myDir, { recursive: true });
       const args = process.platform === 'darwin'
         ? (reveal ? ['-R', target] : [target])
         : [target];
@@ -1115,6 +1251,7 @@ const server = http.createServer(async (req, res) => {
 // ------------------------------------------------------------------ إقلاع ---
 
 loadConfig();
+loadUsers();
 refreshTools();
 fs.mkdirSync(config.downloadDir, { recursive: true });
 
@@ -1149,7 +1286,7 @@ server.on('error', (err) => {
 
 function shutdown() {
   for (const proc of procs.values()) proc.kill('SIGTERM');
-  Promise.resolve(sniffer.stop()).catch(() => {});
+  for (const s of sniffers.values()) Promise.resolve(s.stop()).catch(() => {});
   process.exit(0);
 }
 process.on('SIGINT', shutdown);

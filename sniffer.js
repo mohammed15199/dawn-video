@@ -14,8 +14,8 @@ const path = require('path');
 const os = require('os');
 const { spawn } = require('child_process');
 
-const SUPPORT_DIR = path.join(os.homedir(), 'Library', 'Application Support', 'DawnVideo');
-const PROFILE_DIR = path.join(SUPPORT_DIR, 'chrome-profile');
+const SUPPORT_DIR =
+  process.env.DAWN_STATE_DIR || path.join(os.homedir(), 'Library', 'Application Support', 'DawnVideo');
 const COOKIE_FILE = path.join(SUPPORT_DIR, 'cookies.txt');
 const CDP_PORT = Number(process.env.DAWN_CDP_PORT || 9333);
 
@@ -232,7 +232,15 @@ async function waitForDevTools(port, timeoutMs = 20000) {
 }
 
 class Sniffer {
-  constructor() {
+  /**
+   * كل مستخدم يحصل على نسخة مستقلّة: منفذ تنقيح خاص وملف تعريف متصفح خاص،
+   * حتى لا يرى أحدٌ جلسة غيره ولا يتشاركا الكوكيز.
+   */
+  constructor({ id = 'default', port = CDP_PORT, profileDir, cookieFile } = {}) {
+    this.id = id;
+    this.port = port;
+    this.profileDir = profileDir || path.join(SUPPORT_DIR, 'chrome-profile');
+    this.cookieFile = cookieFile || COOKIE_FILE;
     this.proc = null;
     this.cdp = null;
     this.found = new Map(); // url → معلومات
@@ -275,20 +283,20 @@ class Sniffer {
       }
     }
 
-    await fsp.mkdir(PROFILE_DIR, { recursive: true });
+    await fsp.mkdir(this.profileDir, { recursive: true });
 
     // متصفح يعمل أصلًا على نفس المنفذ؟ نتصل به بدل تشغيل نسخة جديدة.
     // (تشغيل Chrome بنفس user-data-dir لا ينشئ عملية جديدة، بل يمرّر
     //  الرابط للنسخة القائمة ثم تنتهي العملية المُشغَّلة فورًا.)
-    let version = await probeDevTools(CDP_PORT);
+    let version = await probeDevTools(this.port);
 
     if (version) {
       this.onStatus(`${browser.name} مفتوح — جارٍ إعادة الاتصال`);
     } else {
       this.onStatus(`جارٍ فتح ${browser.name}…`);
       const args = [
-        `--remote-debugging-port=${CDP_PORT}`,
-        `--user-data-dir=${PROFILE_DIR}`,
+        `--remote-debugging-port=${this.port}`,
+        `--user-data-dir=${this.profileDir}`,
         '--no-first-run',
         '--no-default-browser-check',
         '--disable-popup-blocking',
@@ -307,7 +315,7 @@ class Sniffer {
       // لا نربط حالة الجلسة بعمر هذه العملية: قد تنتهي فورًا وهي تمرّر
       // الرابط لنسخة قائمة. مصدر الحقيقة هو اتصال CDP نفسه.
       this.proc.on('error', () => {});
-      version = await waitForDevTools(CDP_PORT);
+      version = await waitForDevTools(this.port);
     }
 
     const cdp = new CDP(version.webSocketDebuggerUrl);
@@ -583,9 +591,9 @@ class Sniffer {
         [domain, includeSub, c.path || '/', c.secure ? 'TRUE' : 'FALSE', expires, c.name, c.value].join('\t')
       );
     }
-    await fsp.mkdir(SUPPORT_DIR, { recursive: true });
-    await fsp.writeFile(COOKIE_FILE, lines.join('\n') + '\n', { mode: 0o600 });
-    return COOKIE_FILE;
+    await fsp.mkdir(path.dirname(this.cookieFile), { recursive: true });
+    await fsp.writeFile(this.cookieFile, lines.join('\n') + '\n', { mode: 0o600 });
+    return this.cookieFile;
   }
 
   async stop() {

@@ -252,6 +252,18 @@
       <label class="chk block"><input type="checkbox" id="setMeta"><span>تضمين الصورة المصغّرة وبيانات الملف</span></label>
       <label class="chk block"><input type="checkbox" id="setRestrict"><span>أسماء ملفات لاتينية فقط (بدون رموز)</span></label>
 
+      <div id="usersSection" hidden>
+        <div class="users-head">
+          <span>الأصدقاء</span>
+          <span class="muted small">لكل واحد مجلده وتحميلاته ومتصفحه</span>
+        </div>
+        <div class="add-user">
+          <input id="newUserName" placeholder="اسم الصديق" maxlength="40">
+          <button id="btnAddUser" class="ghost">إضافة</button>
+        </div>
+        <div id="usersList" class="users-list"></div>
+      </div>
+
       <div class="tools-status" id="toolsStatus"></div>
     </div>
     <div class="sheet-foot">

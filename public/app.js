@@ -707,7 +707,61 @@ async function openSettings() {
       <span>ffmpeg — لازم لدمج الصوت والصورة وتحويل الصيغ</span></div>
     <code>${esc(health.ffmpegPath || 'brew install ffmpeg')}</code>`;
 
+  loadUsers();
   $('settingsOverlay').hidden = false;
+}
+
+/* ---- إدارة الأصدقاء (تظهر للمالك فقط) ---- */
+async function loadUsers() {
+  if (!health.user?.owner) { $('usersSection').hidden = true; return; }
+  $('usersSection').hidden = false;
+  try {
+    const { users } = await api('/api/users');
+    $('usersList').innerHTML = users.map((u) => `
+      <div class="user-row" data-id="${esc(u.id)}">
+        <span class="nm">${esc(u.name)}</span>
+        <button data-copy="${esc(u.key)}">نسخ رابط دخوله</button>
+        <button class="del" data-del="${esc(u.id)}">حذف</button>
+      </div>`).join('');
+
+    $('usersList').querySelectorAll('[data-copy]').forEach((b) => {
+      b.addEventListener('click', async () => {
+        const link = `${location.origin}/login?key=${b.dataset.copy}`;
+        try {
+          await navigator.clipboard.writeText(link);
+          toast('نُسخ الرابط — أرسله له', 'ok');
+        } catch {
+          prompt('انسخ الرابط:', link);
+        }
+      });
+    });
+
+    $('usersList').querySelectorAll('[data-del]').forEach((b) => {
+      b.addEventListener('click', async () => {
+        if (!confirm('حذف هذا المستخدم؟ ستُنهى جلسته فورًا.')) return;
+        const res = await fetch('/api/users', {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: b.dataset.del }),
+        });
+        if (!res.ok) toast('تعذّر الحذف', 'error');
+        loadUsers();
+      });
+    });
+  } catch { /* ليس مالكًا */ }
+}
+
+async function addUser() {
+  const name = $('newUserName').value.trim();
+  if (!name) return;
+  try {
+    const { user } = await api('/api/users', { name });
+    $('newUserName').value = '';
+    const link = `${location.origin}/login?key=${user.key}`;
+    try { await navigator.clipboard.writeText(link); toast(`أُضيف ${user.name} — نُسخ رابطه`, 'ok'); }
+    catch { prompt(`رابط دخول ${user.name}:`, link); }
+    loadUsers();
+  } catch (e) { toast(e.message, 'error'); }
 }
 
 async function saveSettings() {
@@ -746,6 +800,8 @@ function bind() {
   $('btnSettings').addEventListener('click', openSettings);
   $('btnCloseSettings').addEventListener('click', () => ($('settingsOverlay').hidden = true));
   $('btnSaveSettings').addEventListener('click', saveSettings);
+  $('btnAddUser').addEventListener('click', addUser);
+  $('newUserName').addEventListener('keydown', (e) => { if (e.key === 'Enter') addUser(); });
   $('settingsOverlay').addEventListener('click', (e) => {
     if (e.target === $('settingsOverlay')) $('settingsOverlay').hidden = true;
   });
