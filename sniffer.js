@@ -20,14 +20,20 @@ const COOKIE_FILE = path.join(SUPPORT_DIR, 'cookies.txt');
 const CDP_PORT = Number(process.env.DAWN_CDP_PORT || 9333);
 
 const BROWSERS = [
+  // على الخوادم (Docker/Linux) يُضبط المسار بمتغيّر البيئة
+  { name: 'Chromium', bin: process.env.CHROME_BIN || '' },
   { name: 'Google Chrome', bin: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' },
   { name: 'Brave', bin: '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser' },
   { name: 'Microsoft Edge', bin: '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge' },
   { name: 'Chromium', bin: '/Applications/Chromium.app/Contents/MacOS/Chromium' },
+  { name: 'Chromium', bin: '/usr/bin/chromium' },
+  { name: 'Chromium', bin: '/usr/bin/chromium-browser' },
+  { name: 'Google Chrome', bin: '/usr/bin/google-chrome' },
 ];
 
 function findBrowser() {
   for (const b of BROWSERS) {
+    if (!b.bin) continue;
     try {
       fs.accessSync(b.bin, fs.constants.X_OK);
       return b;
@@ -291,6 +297,10 @@ class Sniffer {
       ];
       // في العرض المدمج لا نفتح نافذة على الجهاز — الصفحة تُبثّ داخل الأداة
       if (this.viewing) args.push('--headless=new', '--hide-scrollbars');
+      // داخل الحاويات لا تتوفّر صناديق العزل ولا ذاكرة ‎/dev/shm‎ الكافية
+      if (process.env.CHROME_BIN || process.platform === 'linux') {
+        args.push('--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu');
+      }
       args.push(url);
 
       this.proc = spawn(browser.bin, args, { detached: false, stdio: 'ignore' });

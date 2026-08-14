@@ -1,0 +1,9 @@
+.git
+.gitignore
+node_modules
+config.json
+README.md
+LICENSE
+dawn
+*.log
+.DS_Store

@@ -468,6 +468,7 @@ function jobIcon(name) {
     open: '<path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/>',
     stop: '<rect x="6" y="6" width="12" height="12" rx="2"/>',
     retry: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/>',
+    save: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/>',
     trash: '<path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/>',
   };
   return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${paths[name]}</svg>`;
@@ -514,7 +515,10 @@ function renderJob(j) {
     actions.push(`<button class="stop" data-act="cancel" title="إيقاف">${jobIcon('stop')}</button>`);
   } else {
     if (j.status === 'done' && j.files?.length) {
-      actions.push(`<button class="go" data-act="reveal" title="إظهار في المجلد">${jobIcon('open')}</button>`);
+      // على خادم بعيد الملف ليس على جهاز المستخدم، فنعرض تنزيلًا للمتصفح
+      actions.push(health.remote
+        ? `<button class="go" data-act="save" title="حفظ على جهازي">${jobIcon('save')}</button>`
+        : `<button class="go" data-act="reveal" title="إظهار في المجلد">${jobIcon('open')}</button>`);
     }
     if (j.status !== 'done') {
       actions.push(`<button data-act="retry" title="إعادة المحاولة">${jobIcon('retry')}</button>`);
@@ -539,6 +543,16 @@ function renderJob(j) {
         if (act === 'cancel') await api('/api/cancel', { id: j.id });
         else if (act === 'retry') await api('/api/retry', { id: j.id });
         else if (act === 'reveal') await api('/api/open', { path: j.files?.[0], reveal: true });
+        else if (act === 'save') {
+          for (const f of j.files || []) {
+            const a = document.createElement('a');
+            a.href = `/api/file?path=${encodeURIComponent(f)}`;
+            a.download = '';
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+          }
+        }
       } catch (e) { toast(e.message, 'error'); }
     });
   });
