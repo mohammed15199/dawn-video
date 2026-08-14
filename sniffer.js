@@ -233,6 +233,11 @@ class Sniffer {
     this.pageUrl = null;
     this.pageTitle = null;
     this.active = false;
+    // العرض المدمج: آخر إطار من بث الشاشة، وجلسة الصفحة التي نرسل لها الإدخال
+    this.frame = null;
+    this.pageSession = null;
+    this.viewing = false;
+    this.headless = false;
     this.onMedia = () => {};
     this.onStatus = () => {};
   }
@@ -241,10 +246,11 @@ class Sniffer {
     return !!findBrowser();
   }
 
-  async start(url, { onMedia, onStatus } = {}) {
+  async start(url, { onMedia, onStatus, embedded } = {}) {
     this.onMedia = onMedia || (() => {});
     this.onStatus = onStatus || (() => {});
     this.pageUrl = url;
+    if (embedded !== undefined) this.viewing = !!embedded;
 
     const browser = findBrowser();
     if (!browser) throw new Error('لم يُعثر على Chrome أو Brave أو Edge على الجهاز.');
@@ -274,19 +280,20 @@ class Sniffer {
       this.onStatus(`${browser.name} مفتوح — جارٍ إعادة الاتصال`);
     } else {
       this.onStatus(`جارٍ فتح ${browser.name}…`);
-      this.proc = spawn(
-        browser.bin,
-        [
-          `--remote-debugging-port=${CDP_PORT}`,
-          `--user-data-dir=${PROFILE_DIR}`,
-          '--no-first-run',
-          '--no-default-browser-check',
-          '--disable-popup-blocking',
-          '--disable-features=Translate,OptimizationGuideModelDownloading',
-          url,
-        ],
-        { detached: false, stdio: 'ignore' }
-      );
+      const args = [
+        `--remote-debugging-port=${CDP_PORT}`,
+        `--user-data-dir=${PROFILE_DIR}`,
+        '--no-first-run',
+        '--no-default-browser-check',
+        '--disable-popup-blocking',
+        '--disable-features=Translate,OptimizationGuideModelDownloading',
+        '--window-size=1280,800',
+      ];
+      // في العرض المدمج لا نفتح نافذة على الجهاز — الصفحة تُبثّ داخل الأداة
+      if (this.viewing) args.push('--headless=new', '--hide-scrollbars');
+      args.push(url);
+
+      this.proc = spawn(browser.bin, args, { detached: false, stdio: 'ignore' });
       // لا نربط حالة الجلسة بعمر هذه العملية: قد تنتهي فورًا وهي تمرّر
       // الرابط لنسخة قائمة. مصدر الحقيقة هو اتصال CDP نفسه.
       this.proc.on('error', () => {});
@@ -328,6 +335,69 @@ class Sniffer {
     return { browser: browser.name, reused: !this.proc };
   }
 
+  /** يبدأ بثّ الصفحة كإطارات JPEG لعرضها داخل واجهة الأداة */
+  async _castOn(sid) {
+    try {
+      await this.cdp.send(
+        'Page.startScreencast',
+        { format: 'jpeg', quality: 55, maxWidth: 1280, maxHeight: 800, everyNthFrame: 1 },
+        sid
+      );
+    } catch {
+      /* الهدف قد يكون أُغلق */
+    }
+  }
+
+  async startView() {
+    this.viewing = true;
+    if (this.cdp && this.pageSession) await this._castOn(this.pageSession);
+  }
+
+  /** يمرّر نقرات المستخدم وكتابته من الواجهة إلى الصفحة الحقيقية */
+  async input(ev) {
+    if (!this.cdp || !this.cdp.alive || !this.pageSession) {
+      throw new Error('لا توجد صفحة نشطة');
+    }
+    const s = this.pageSession;
+    const x = Number(ev.x) || 0;
+    const y = Number(ev.y) || 0;
+
+    if (ev.kind === 'click') {
+      const clickCount = Math.min(Number(ev.clickCount) || 1, 3);
+      const base = { x, y, button: 'left', clickCount };
+      await this.cdp.send('Input.dispatchMouseEvent', { ...base, type: 'mousePressed' }, s);
+      await this.cdp.send('Input.dispatchMouseEvent', { ...base, type: 'mouseReleased' }, s);
+      return;
+    }
+
+    if (ev.kind === 'scroll') {
+      await this.cdp.send(
+        'Input.dispatchMouseEvent',
+        { type: 'mouseWheel', x, y, deltaX: Number(ev.dx) || 0, deltaY: Number(ev.dy) || 0 },
+        s
+      );
+      return;
+    }
+
+    if (ev.kind === 'text' && ev.text) {
+      await this.cdp.send('Input.insertText', { text: String(ev.text) }, s);
+      return;
+    }
+
+    if (ev.kind === 'key') {
+      const codes = {
+        Enter: 13, Backspace: 8, Tab: 9, Escape: 27, Delete: 46,
+        ArrowUp: 38, ArrowDown: 40, ArrowLeft: 37, ArrowRight: 39,
+        PageUp: 33, PageDown: 34, Home: 36, End: 35,
+      };
+      const code = codes[ev.key];
+      if (!code) return;
+      const base = { windowsVirtualKeyCode: code, nativeVirtualKeyCode: code, key: ev.key };
+      await this.cdp.send('Input.dispatchKeyEvent', { ...base, type: 'rawKeyDown' }, s);
+      await this.cdp.send('Input.dispatchKeyEvent', { ...base, type: 'keyUp' }, s);
+    }
+  }
+
   _teardown() {
     if (this.cdp) {
       this.cdp.onClose = () => {};
@@ -347,6 +417,10 @@ class Sniffer {
       try {
         await cdp.send('Network.enable', {}, sid);
         await cdp.send('Page.enable', {}, sid);
+        if (type === 'page') {
+          this.pageSession = sid; // آخر صفحة هي هدف الإدخال والعرض
+          if (this.viewing) await this._castOn(sid);
+        }
         // نلتقط الأهداف الفرعية داخل هذا التبويب أيضًا (المشغّلات المضمّنة)
         await cdp.send(
           'Target.setAutoAttach',
@@ -355,6 +429,22 @@ class Sniffer {
         );
       } catch {
         /* قد يُغلق الهدف قبل أن نجهّزه */
+      }
+      return;
+    }
+
+    if (method === 'Page.screencastFrame') {
+      this.frame = {
+        buf: Buffer.from(params.data, 'base64'),
+        w: params.metadata?.deviceWidth || 1280,
+        h: params.metadata?.deviceHeight || 800,
+        at: Date.now(),
+      };
+      // بدون الإقرار يتوقّف البث بعد إطار أو إطارين
+      try {
+        await cdp.send('Page.screencastFrameAck', { sessionId: params.sessionId }, sessionId);
+      } catch {
+        /* الصفحة أُغلقت */
       }
       return;
     }

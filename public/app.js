@@ -8,6 +8,10 @@ const api = async (path, body) => {
     headers: body === undefined ? {} : { 'Content-Type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
+  if (res.status === 401) {
+    location.replace('/login'); // انتهت الجلسة
+    throw new Error('انتهت الجلسة');
+  }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || `خطأ ${res.status}`);
   return data;
@@ -308,8 +312,9 @@ async function startSniff() {
     $('sniffPanel').hidden = false;
     $('sniffStatus').textContent = 'جارٍ فتح المتصفح…';
     $('sniffPulse').classList.remove('off');
-    const r = await api('/api/sniff/start', { url: list[0] });
-    $('sniffStatus').textContent = `${r.browser} مفتوح — سجّل دخولك وشغّل الفيديو`;
+    const r = await api('/api/sniff/start', { url: list[0], embedded: true });
+    $('sniffStatus').textContent = `${r.browser} يعمل داخل الأداة — سجّل دخولك وشغّل الفيديو`;
+    startView();
     $('sniffPanel').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   } catch (e) {
     showError(e.message);
@@ -320,6 +325,7 @@ async function startSniff() {
 }
 
 async function stopSniff() {
+  stopView();
   try { await api('/api/sniff/stop', {}); } catch { /* تجاهل */ }
   $('sniffPulse').classList.add('off');
 }
@@ -364,6 +370,98 @@ async function downloadMedia(m) {
   } catch (e) { toast(e.message, 'error'); }
 }
 
+/* ---- شاشة المتصفح المدمجة ---- */
+let viewLoop = null;
+let viewSize = { w: 1280, h: 800 };
+let frameCount = 0;
+let frameMark = 0;
+
+function startView() {
+  if (viewLoop) return;
+  $('viewWrap').hidden = false;
+  const img = $('viewImg');
+  frameMark = Date.now();
+
+  const tick = () => {
+    const next = new Image();
+    next.onload = () => {
+      img.src = next.src;
+      $('viewIdle').hidden = true;
+      viewSize = { w: next.naturalWidth, h: next.naturalHeight };
+      frameCount++;
+      const dt = Date.now() - frameMark;
+      if (dt > 1000) {
+        $('viewFps').textContent = `${Math.round((frameCount * 1000) / dt)} إطار/ث`;
+        frameCount = 0;
+        frameMark = Date.now();
+      }
+      viewLoop = setTimeout(tick, 60);
+    };
+    next.onerror = () => { viewLoop = setTimeout(tick, 600); };
+    next.src = `/api/sniff/frame?t=${Date.now()}`;
+  };
+  tick();
+}
+
+function stopView() {
+  clearTimeout(viewLoop);
+  viewLoop = null;
+  $('viewWrap').hidden = true;
+  $('viewIdle').hidden = false;
+  $('viewImg').removeAttribute('src');
+}
+
+/** يحوّل إحداثيات النقر في الصورة المعروضة إلى إحداثيات الصفحة الحقيقية */
+function toPageCoords(e) {
+  const img = $('viewImg');
+  const r = img.getBoundingClientRect();
+  // object-fit: contain — نحسب المساحة الفعلية للصورة داخل الإطار
+  const scale = Math.min(r.width / viewSize.w, r.height / viewSize.h);
+  const dw = viewSize.w * scale;
+  const dh = viewSize.h * scale;
+  const ox = r.left + (r.width - dw) / 2;
+  const oy = r.top + (r.height - dh) / 2;
+  return {
+    x: Math.round((e.clientX - ox) / scale),
+    y: Math.round((e.clientY - oy) / scale),
+  };
+}
+
+const sendInput = (payload) => api('/api/sniff/input', payload).catch(() => {});
+
+function bindView() {
+  const img = $('viewImg');
+
+  img.addEventListener('click', (e) => {
+    const { x, y } = toPageCoords(e);
+    sendInput({ kind: 'click', x, y, clickCount: e.detail || 1 });
+    $('viewKeys').focus();
+  });
+
+  img.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const { x, y } = toPageCoords(e);
+    sendInput({ kind: 'scroll', x, y, dx: e.deltaX, dy: e.deltaY });
+  }, { passive: false });
+
+  const keys = $('viewKeys');
+  keys.addEventListener('keydown', (e) => {
+    const special = ['Enter', 'Backspace', 'Tab', 'Escape', 'Delete',
+      'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'];
+    if (special.includes(e.key)) {
+      e.preventDefault();
+      sendInput({ kind: 'key', key: e.key });
+      if (e.key === 'Enter') keys.value = '';
+    }
+  });
+  keys.addEventListener('input', (e) => {
+    const text = e.target.value;
+    if (!text) return;
+    e.target.value = '';
+    sendInput({ kind: 'text', text });
+  });
+}
+
 /* ===================== عرض المهام ===================== */
 function jobIcon(name) {
   const paths = {
@@ -402,6 +500,11 @@ function renderJob(j) {
     if (j.speed) bits.push(`<span class="stat">${fmtSpeed(j.speed)}</span>`);
     if (j.eta) bits.push(`<span class="stat">متبقٍ ${fmtEta(j.eta)}</span>`);
     if (j.total) bits.push(`<span class="stat">${fmtBytes(j.downloaded)} / ${fmtBytes(j.total)}</span>`);
+    else if (j.downloaded) bits.push(`<span class="stat">${fmtBytes(j.downloaded)}</span>`);
+    // بث HLS: نعرض الزمن المُنزَّل من الفيديو بدل الحجم الكلي المجهول
+    if (j.mediaTime) {
+      bits.push(`<span class="stat">${fmtTime(j.mediaTime)}${j.duration ? ' / ' + fmtTime(j.duration) : ''}</span>`);
+    }
   } else if (j.status === 'done' && j.files?.length) {
     bits.push(`<span class="stat">${AR.format(j.files.length)} ملف</span>`);
   }
@@ -457,16 +560,78 @@ function renderAll() {
 }
 
 /* ===================== الأحداث الحية ===================== */
+
+function applyJobs(list) {
+  jobs.clear();
+  for (const j of list) jobs.set(j.id, j);
+  renderAll();
+}
+
+function applySniff(s) {
+  media.clear();
+  for (const m of s.items) media.set(m.url, m);
+  if (s.active || s.items.length) {
+    $('sniffPanel').hidden = false;
+    $('sniffPulse').classList.toggle('off', !s.active);
+    $('sniffStatus').textContent = s.active
+      ? 'المتصفح يعمل داخل الأداة — سجّل دخولك وشغّل الفيديو'
+      : 'توقّف الاستخراج — هذه آخر الروابط الملتقطة';
+    if (s.active && s.view) startView();
+    else if (!s.active) stopView();
+    renderMedia();
+  }
+}
+
+/* ---- استطلاع احتياطي ----
+   بعض الوسطاء (Cloudflare عبر النفق) يخزّنون بث SSE مؤقتًا فلا يصل شيء،
+   فتبدو الواجهة جامدة والتحميل يعمل خلف الكواليس. هنا نستطلع بدلًا منه. */
+let sseAlive = false;
+let pollTimer = null;
+
+async function pollState() {
+  try {
+    const s = await api('/api/state');
+    applyJobs(s.jobs);
+    applySniff(s.sniff);
+  } catch {
+    /* المحاولة القادمة */
+  }
+}
+
+function startPolling(reason) {
+  if (pollTimer) return;
+  console.info('[dawn] تعذّر البث المباشر — التحوّل للاستطلاع:', reason);
+  pollTimer = setInterval(pollState, 1500);
+  pollState();
+}
+
+function stopPolling() {
+  if (!pollTimer) return;
+  clearInterval(pollTimer);
+  pollTimer = null;
+}
+
+function markSSEAlive() {
+  if (sseAlive) return;
+  sseAlive = true;
+  stopPolling();
+}
+
 function connectEvents() {
   const es = new EventSource('/api/events');
 
+  // إن لم يصل أي شيء خلال ٤ ثوانٍ نعتبر البث محجوبًا ونستطلع
+  setTimeout(() => {
+    if (!sseAlive) startPolling('لا استجابة خلال ٤ ثوانٍ');
+  }, 4000);
+
   es.addEventListener('snapshot', (e) => {
-    jobs.clear();
-    for (const j of JSON.parse(e.data)) jobs.set(j.id, j);
-    renderAll();
+    markSSEAlive();
+    applyJobs(JSON.parse(e.data));
   });
 
   es.addEventListener('job', (e) => {
+    markSSEAlive();
     const j = JSON.parse(e.data);
     const prev = jobs.get(j.id);
     jobs.set(j.id, j);
@@ -477,22 +642,14 @@ function connectEvents() {
   });
 
   es.addEventListener('sniff-snapshot', (e) => {
-    const s = JSON.parse(e.data);
-    media.clear();
-    for (const m of s.items) media.set(m.url, m);
-    if (s.active || s.items.length) {
-      $('sniffPanel').hidden = false;
-      $('sniffPulse').classList.toggle('off', !s.active);
-      $('sniffStatus').textContent = s.active
-        ? 'المتصفح مفتوح — سجّل دخولك وشغّل الفيديو'
-        : 'توقّف الاستخراج — هذه آخر الروابط الملتقطة';
-      renderMedia();
-    }
+    markSSEAlive();
+    applySniff(JSON.parse(e.data));
   });
 
   es.addEventListener('sniff-reset', () => { media.clear(); renderMedia(); });
 
   es.addEventListener('sniff-media', (e) => {
+    markSSEAlive();
     const m = JSON.parse(e.data);
     const isNew = !media.has(m.url);
     media.set(m.url, m);
@@ -512,7 +669,11 @@ function connectEvents() {
     loadHealth();
   });
 
-  es.onerror = () => { /* المتصفح يعيد الاتصال تلقائيًا */ };
+  es.onerror = () => {
+    // المتصفح يعيد المحاولة تلقائيًا، لكن قد يكون البث محجوبًا كليًا
+    sseAlive = false;
+    startPolling('انقطع البث');
+  };
 }
 
 /* ===================== الإعدادات ===================== */
@@ -625,6 +786,7 @@ function bind() {
 
 /* ===================== الإقلاع ===================== */
 bind();
+bindView();
 loadHealth();
 connectEvents();
 $('url').focus();

@@ -110,6 +110,19 @@
       <li>سيظهر رابط الفيديو هنا تلقائيًا — اضغط تحميل</li>
     </ol>
 
+    <div id="viewWrap" class="view-wrap" hidden>
+      <div class="view-bar">
+        <span class="view-hint">انقر واكتب داخل الشاشة كأنك في المتصفح</span>
+        <span id="viewFps" class="view-fps"></span>
+      </div>
+      <div class="view-stage">
+        <img id="viewImg" alt="شاشة المتصفح" draggable="false">
+        <div id="viewIdle" class="view-idle"><span class="spinner dark"></span> جارٍ تحميل الصفحة…</div>
+      </div>
+      <input id="viewKeys" class="view-keys" autocomplete="off" autocapitalize="off"
+             spellcheck="false" placeholder="اكتب هنا ليصل النص إلى الصفحة (لتسجيل الدخول)">
+    </div>
+
     <div id="sniffList" class="sniff-list"></div>
     <div id="sniffEmpty" class="sniff-waiting">
       <span class="spinner dark"></span>

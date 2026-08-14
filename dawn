@@ -1,13 +1,59 @@
 #!/bin/bash
 # دَون فيديو — مشغّل الأداة
-# الاستخدام:  ./dawn            → يفتح الواجهة
-#             ./dawn <رابط>     → يحمّل مباشرة من الطرفية بأفضل جودة
+#
+#   ./dawn                   → الواجهة محليًا على 127.0.0.1:5178
+#   ./dawn tunnel            → رابط https عام محمي بكلمة مرور
+#   ./dawn install-service   → تشغيل تلقائي عند الإقلاع + إعادة تشغيل عند الانقطاع
+#   ./dawn uninstall-service → إلغاء التشغيل التلقائي
+#   ./dawn <رابط>            → تحميل مباشر من الطرفية بأفضل جودة
 
 set -e
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+PORT="${PORT:-5178}"
+PLIST="$HOME/Library/LaunchAgents/com.dawnvideo.tunnel.plist"
 
-if [ -n "$1" ]; then
+# ------------------------------------------------- التشغيل التلقائي ---
+if [ "$1" = "install-service" ]; then
+  [ -z "$DAWN_PASSWORD" ] && DAWN_PASSWORD="$(LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 24)"
+  mkdir -p "$HOME/Library/LaunchAgents"
+  cat > "$PLIST" <<PLIST_END
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.dawnvideo.tunnel</string>
+  <key>ProgramArguments</key>
+  <array><string>$DIR/dawn</string><string>tunnel</string></array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>DAWN_PASSWORD</key><string>$DAWN_PASSWORD</string>
+    <key>DAWN_NGROK_DOMAIN</key><string>${DAWN_NGROK_DOMAIN:-}</string>
+    <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>/tmp/dawn-service.log</string>
+  <key>StandardErrorPath</key><string>/tmp/dawn-service.log</string>
+</dict></plist>
+PLIST_END
+  chmod 600 "$PLIST"
+  launchctl unload "$PLIST" 2>/dev/null || true
+  launchctl load "$PLIST"
+  echo "  ✓ فُعّل التشغيل التلقائي — يبدأ مع الإقلاع ويعيد التشغيل عند أي انقطاع"
+  echo "    كلمة المرور : $DAWN_PASSWORD"
+  echo "    السجل       : /tmp/dawn-service.log  (الرابط يُطبع فيه)"
+  exit 0
+fi
+
+if [ "$1" = "uninstall-service" ]; then
+  launchctl unload "$PLIST" 2>/dev/null || true
+  rm -f "$PLIST"
+  echo "  ✓ أُلغي التشغيل التلقائي"
+  exit 0
+fi
+
+# ------------------------------------------------------- تحميل مباشر ---
+if [ -n "$1" ] && [ "$1" != "tunnel" ]; then
   OUT="${DAWN_DIR:-$HOME/Downloads/DawnVideo}"
   mkdir -p "$OUT"
   exec yt-dlp \
@@ -19,4 +65,77 @@ if [ -n "$1" ]; then
 fi
 
 command -v node >/dev/null || { echo "Node.js غير مثبّت"; exit 1; }
-exec node "$DIR/server.js"
+
+# ------------------------------------------------------------ محليًا ---
+if [ "$1" != "tunnel" ]; then
+  exec node "$DIR/server.js"
+fi
+
+# ------------------------------------------------------------- نفق ---
+if [ -z "$DAWN_PASSWORD" ]; then
+  DAWN_PASSWORD="$(LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 24)"
+fi
+export DAWN_PASSWORD
+
+cleanup() { [ -n "$SRV" ] && kill "$SRV" 2>/dev/null; [ -n "$TUN" ] && kill "$TUN" 2>/dev/null; }
+trap cleanup EXIT INT TERM
+
+NO_OPEN=1 node "$DIR/server.js" >/tmp/dawn-server.log 2>&1 &
+SRV=$!
+sleep 2
+
+URL=""
+KIND=""
+
+# (١) Tailscale Funnel — رابط ثابت مجاني بلا نطاق
+if [ -z "$URL" ] && command -v tailscale >/dev/null 2>&1; then
+  if tailscale status >/dev/null 2>&1; then
+    HOSTN="$(tailscale status --json 2>/dev/null \
+      | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["Self"]["DNSName"].rstrip("."))' 2>/dev/null || true)"
+    if [ -n "$HOSTN" ]; then
+      tailscale funnel --bg "$PORT" >/dev/null 2>&1 || true
+      URL="https://$HOSTN"; KIND="Tailscale Funnel (ثابت)"
+    fi
+  fi
+fi
+
+# (٢) ngrok بنطاق ثابت
+if [ -z "$URL" ] && [ -n "$DAWN_NGROK_DOMAIN" ] && command -v ngrok >/dev/null 2>&1; then
+  ngrok http --domain="$DAWN_NGROK_DOMAIN" "$PORT" --log=stdout >/tmp/dawn-ngrok.log 2>&1 &
+  TUN=$!
+  sleep 5
+  URL="https://$DAWN_NGROK_DOMAIN"; KIND="ngrok (ثابت)"
+fi
+
+# (٣) نفق Cloudflare السريع — يعمل فورًا لكن رابطه مؤقت
+if [ -z "$URL" ]; then
+  command -v cloudflared >/dev/null || {
+    echo "cloudflared غير مثبّت.  نفّذ:  brew install cloudflared"; exit 1; }
+  LOG="$(mktemp /tmp/dawn-tunnel.XXXXXX)"
+  cloudflared tunnel --url "http://127.0.0.1:$PORT" --no-autoupdate >"$LOG" 2>&1 &
+  TUN=$!
+  printf '  جارٍ فتح النفق'
+  for _ in $(seq 1 40); do
+    URL="$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$LOG" | head -1 || true)"
+    [ -n "$URL" ] && break
+    printf '.'; sleep 1
+  done
+  echo
+  KIND="Cloudflare سريع (مؤقت — يتغيّر كل تشغيل)"
+  [ -z "$URL" ] && { echo "  تعذّر إنشاء النفق. راجع: $LOG"; exit 1; }
+fi
+
+cat <<EOF
+
+  ────────────────────────────────────────────────
+   الرابط       :  $URL
+   النوع        :  $KIND
+   كلمة المرور  :  $DAWN_PASSWORD
+  ────────────────────────────────────────────────
+
+  الملفات تنزل على هذا الجهاز في ~/Downloads/DawnVideo
+  للإيقاف: Ctrl+C
+
+EOF
+
+if [ -n "$TUN" ]; then wait "$TUN"; else while kill -0 "$SRV" 2>/dev/null; do sleep 5; done; fi
