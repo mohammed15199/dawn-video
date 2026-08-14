@@ -1,0 +1,13 @@
+{
+  "name": "dawn-video",
+  "version": "1.0.0",
+  "private": true,
+  "description": "أداة تحميل الفيديوهات من أي موقع — واجهة محلية تقود yt-dlp",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

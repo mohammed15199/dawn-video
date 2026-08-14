@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>دَون فيديو — تحميل من أي موقع</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⬇️</text></svg>">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <div class="mark" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 3v12"/><path d="m7 11 5 5 5-5"/><path d="M4 21h16"/>
+      </svg>
+    </div>
+    <div class="brand-text">
+      <h1>دَون فيديو</h1>
+      <p>حمّل أي فيديو من أي موقع</p>
+    </div>
+  </div>
+
+  <div class="topbar-actions">
+    <div id="chips" class="chips"></div>
+    <button id="btnFolder" class="ghost" title="فتح مجلد التحميلات">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/></svg>
+      <span>المجلد</span>
+    </button>
+    <button id="btnSettings" class="ghost" title="الإعدادات">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6h.09A1.65 1.65 0 0 0 10 3.09V3a2 2 0 1 1 4 0v.09A1.65 1.65 0 0 0 15 4.6a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9v.09c.66.26 1.1.9 1.11 1.61H21a2 2 0 1 1 0 4h-.09c-.7 0-1.34.44-1.51 1.1Z"/></svg>
+      <span>الإعدادات</span>
+    </button>
+  </div>
+</header>
+
+<main>
+  <!-- ===================== إدخال الرابط ===================== -->
+  <section class="card input-card">
+    <div class="url-row">
+      <div class="url-field">
+        <svg class="url-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+        <textarea id="url" rows="1" placeholder="الصق رابط الفيديو هنا…  (يوتيوب، تويتر/X، تيك توك، إنستقرام، فيسبوك، ريديت، فيميو، وأي موقع آخر)" spellcheck="false" dir="ltr"></textarea>
+      </div>
+      <div class="btn-stack">
+        <button id="btnAnalyze" class="primary">
+          <span class="btn-label">تحليل الرابط</span>
+          <span class="spinner" hidden></span>
+        </button>
+        <button id="btnSniff" class="ghost sniff-btn" title="يفتح متصفحًا ويلتقط رابط الفيديو من الشبكة">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+          <span>استخراج من الموقع</span>
+        </button>
+      </div>
+    </div>
+    <div class="hint-row">
+      <button class="linkish" id="btnPaste">لصق من الحافظة</button>
+      <span class="dot">•</span>
+      <button class="linkish" id="btnMulti">تحميل عدة روابط دفعة واحدة</button>
+      <span class="dot">•</span>
+      <span class="muted">يدعم أكثر من ١٨٠٠ موقع + أي رابط فيديو مباشر</span>
+    </div>
+
+    <div class="access-row">
+      <span class="access-label">للمواقع المحمية:</span>
+      <label class="chk"><input type="checkbox" id="optCookies"><span>كوكيز المتصفح</span></label>
+      <label class="chk"><input type="checkbox" id="optReferer"><span>رابط الإحالة</span></label>
+    </div>
+
+    <div id="cookiesRow" class="sub-row" hidden>
+      <label for="cookiesBrowser">اجلب تسجيل الدخول من:</label>
+      <select id="cookiesBrowser">
+        <option value="chrome">Chrome</option>
+        <option value="safari">Safari</option>
+        <option value="firefox">Firefox</option>
+        <option value="edge">Edge</option>
+        <option value="brave">Brave</option>
+        <option value="opera">Opera</option>
+        <option value="vivaldi">Vivaldi</option>
+      </select>
+      <span class="muted small">أغلق المتصفح أولًا إن كان Chrome</span>
+    </div>
+
+    <div id="refererRow" class="sub-row" hidden>
+      <label for="refererUrl">صفحة الدرس:</label>
+      <input id="refererUrl" class="referer-input" dir="ltr" placeholder="https://example.com/course/lesson" spellcheck="false">
+      <span class="muted small">يلزم عندما يرفض السيرفر الروابط القادمة من خارج الموقع</span>
+    </div>
+
+    <div id="err" class="alert" hidden></div>
+  </section>
+
+  <!-- ===================== مستخرِج الشبكة ===================== -->
+  <section id="sniffPanel" class="card sniff" hidden>
+    <div class="sniff-head">
+      <div class="sniff-title">
+        <span class="pulse" id="sniffPulse"></span>
+        <div>
+          <h3>الاستخراج من الموقع</h3>
+          <p id="sniffStatus">…</p>
+        </div>
+      </div>
+      <button id="btnSniffStop" class="ghost">إيقاف وإغلاق المتصفح</button>
+    </div>
+
+    <ol class="sniff-steps">
+      <li>سجّل دخولك في نافذة المتصفح التي فُتحت</li>
+      <li>افتح الدرس واضغط <b>تشغيل</b> على الفيديو</li>
+      <li>سيظهر رابط الفيديو هنا تلقائيًا — اضغط تحميل</li>
+    </ol>
+
+    <div id="sniffList" class="sniff-list"></div>
+    <div id="sniffEmpty" class="sniff-waiting">
+      <span class="spinner dark"></span>
+      <span>في انتظار تشغيل الفيديو…</span>
+    </div>
+  </section>
+
+  <!-- ===================== معاينة الفيديو ===================== -->
+  <section id="preview" class="card preview" hidden>
+    <div class="preview-head">
+      <div class="thumb-wrap">
+        <img id="pvThumb" alt="" referrerpolicy="no-referrer">
+        <span id="pvDur" class="dur"></span>
+      </div>
+      <div class="meta">
+        <h2 id="pvTitle"></h2>
+        <div class="meta-sub">
+          <span id="pvUploader" class="badge"></span>
+          <span id="pvSite" class="badge site"></span>
+          <span id="pvLive" class="badge live" hidden>بث مباشر</span>
+        </div>
+        <div id="pvPlaylist" class="playlist-note" hidden></div>
+      </div>
+    </div>
+
+    <div class="options">
+      <div class="opt-group">
+        <label class="opt-label">النوع</label>
+        <div class="segment" id="modeSeg">
+          <button class="seg on" data-mode="video">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 8-6 4 6 4V8Z"/><rect width="14" height="12" x="2" y="6" rx="2"/></svg>
+            فيديو
+          </button>
+          <button class="seg" data-mode="audio">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+            صوت فقط
+          </button>
+        </div>
+      </div>
+
+      <div class="opt-group" id="qualityGroup">
+        <label class="opt-label" for="quality">الجودة</label>
+        <select id="quality"></select>
+      </div>
+
+      <div class="opt-group" id="audioGroup" hidden>
+        <label class="opt-label" for="audioFormat">صيغة الصوت</label>
+        <select id="audioFormat">
+          <option value="mp3">MP3 — الأوسع توافقًا</option>
+          <option value="m4a">M4A — جودة أعلى بنفس الحجم</option>
+          <option value="opus">Opus — أصغر حجمًا</option>
+          <option value="wav">WAV — بدون ضغط</option>
+									          <option value="flac">FLAC — بلا فقد</option>
+        </select>
+      </div>
+
+      <div class="opt-group grow">
+        <label class="opt-label">خيارات</label>
+        <div class="toggles">
+          <label class="chk"><input type="checkbox" id="optSubs"><span>تنزيل الترجمات</span></label>
+          <label class="chk"><input type="checkbox" id="optPlaylist"><span>القائمة كاملة</span></label>
+          <label class="chk"><input type="checkbox" id="optTrim"><span>مقطع محدّد</span></label>
+        </div>
+      </div>
+    </div>
+
+    <div id="trimRow" class="sub-row" hidden>
+      <label>من</label>
+      <input id="trimFrom" class="time" dir="ltr" placeholder="00:00:30" spellcheck="false">
+      <label>إلى</label>
+      <input id="trimTo" class="time" dir="ltr" placeholder="00:02:15" spellcheck="false">
+      <span class="muted small">اتركه فارغًا للبداية أو النهاية</span>
+    </div>
+
+    <div class="preview-actions">
+      <button id="btnDownload" class="primary big">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 11 5 5 5-5"/><path d="M4 21h16"/></svg>
+        <span>تحميل</span>
+      </button>
+      <button id="btnFormats" class="ghost">كل الصيغ المتاحة</button>
+      <span id="pvSizeHint" class="muted small"></span>
+    </div>
+
+    <div id="formatsBox" class="formats" hidden></div>
+  </section>
+
+  <!-- ===================== قائمة التحميلات ===================== -->
+  <section class="downloads">
+    <div class="dl-head">
+      <h3>التحميلات</h3>
+      <div class="dl-head-actions">
+        <span id="dlCount" class="muted small"></span>
+        <button id="btnClear" class="linkish">مسح المنتهية</button>
+      </div>
+    </div>
+    <div id="jobs" class="jobs"></div>
+    <div id="empty" class="empty">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 11 5 5 5-5"/><path d="M4 21h16"/></svg>
+      <p>لا توجد تحميلات بعد</p>
+      <span>الصق رابطًا في الأعلى للبدء</span>
+    </div>
+  </section>
+</main>
+
+<!-- ===================== لوحة الإعدادات ===================== -->
+<div id="settingsOverlay" class="overlay" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="setTitle">
+    <div class="sheet-head">
+      <h3 id="setTitle">الإعدادات</h3>
+      <button id="btnCloseSettings" class="icon-btn" aria-label="إغلاق">✕</button>
+    </div>
+    <div class="sheet-body">
+      <label class="field">
+        <span>مجلد التحميل</span>
+        <input id="setDir" dir="ltr" spellcheck="false">
+      </label>
+      <div class="field-row">
+        <label class="field">
+          <span>تحميلات متوازية</span>
+          <input id="setConc" type="number" min="1" max="6" dir="ltr">
+        </label>
+        <label class="field">
+          <span>أجزاء متزامنة (السرعة)</span>
+          <input id="setFrag" type="number" min="1" max="16" dir="ltr">
+        </label>
+      </div>
+      <label class="chk block"><input type="checkbox" id="setMeta"><span>تضمين الصورة المصغّرة وبيانات الملف</span></label>
+      <label class="chk block"><input type="checkbox" id="setRestrict"><span>أسماء ملفات لاتينية فقط (بدون رموز)</span></label>
+
+      <div class="tools-status" id="toolsStatus"></div>
+    </div>
+    <div class="sheet-foot">
+      <button id="btnUpdateYtdlp" class="ghost">تحديث yt-dlp</button>
+      <button id="btnSaveSettings" class="primary">حفظ</button>
+    </div>
+  </div>
+</div>
+
+<div id="toasts" class="toasts"></div>
+
+<script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,22 @@
+#!/bin/bash
+# دَون فيديو — مشغّل الأداة
+# الاستخدام:  ./dawn            → يفتح الواجهة
+#             ./dawn <رابط>     → يحمّل مباشرة من الطرفية بأفضل جودة
+
+set -e
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+
+if [ -n "$1" ]; then
+  OUT="${DAWN_DIR:-$HOME/Downloads/DawnVideo}"
+  mkdir -p "$OUT"
+  exec yt-dlp \
+    -f 'bv*+ba/b' --merge-output-format mp4 \
+    --embed-metadata --embed-thumbnail \
+    --concurrent-fragments 4 --no-mtime \
+    -o "$OUT/%(title).180B [%(id)s].%(ext)s" \
+    "$@"
+fi
+
+command -v node >/dev/null || { echo "Node.js غير مثبّت"; exit 1; }
+exec node "$DIR/server.js"

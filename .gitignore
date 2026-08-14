@@ -1,0 +1,25 @@
+# إعدادات محلية — تحتوي مسار جهاز المستخدم، وتُنشأ تلقائيًا عند أول تشغيل
+config.json
+
+# مخرجات وتحميلات
+downloads/
+*.mp4
+*.mp3
+*.m4a
+*.webm
+*.mkv
+*.srt
+*.vtt
+*.part
+
+# ملفات جلسة المتصفح والكوكيز (تُحفظ خارج المستودع أصلًا، للاحتياط فقط)
+.chrome-profile/
+cookies.txt
+
+# Node
+node_modules/
+npm-debug.log*
+*.log
+
+# macOS
+.DS_Store
