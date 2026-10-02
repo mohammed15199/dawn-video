@@ -427,7 +427,28 @@ function toPageCoords(e) {
   };
 }
 
-const sendInput = (payload) => api('/api/sniff/input', payload).catch(() => {});
+// الإدخال يُرسل في طابور متسلسل: الإرسال المتوازي كان يجعل الأحرف
+// تصل بترتيب مختلف عبر الشبكة فيفسد ما يُكتب (كلمات المرور خاصةً).
+let inputChain = Promise.resolve();
+const sendInput = (payload) => {
+  inputChain = inputChain
+    .then(() => api('/api/sniff/input', payload))
+    .catch(() => {});
+  return inputChain;
+};
+
+/** يلصق نصًّا من الحافظة داخل الصفحة المعروضة */
+async function pasteIntoPage() {
+  let text = '';
+  try {
+    text = await navigator.clipboard.readText();
+  } catch {
+    text = prompt('الصق هنا بـ ⌘V ثم اضغط موافق:') || '';
+  }
+  if (!text) return;
+  await sendInput({ kind: 'text', text });
+  toast('لُصق داخل الصفحة', 'ok');
+}
 
 function bindView() {
   const img = $('viewImg');
@@ -436,6 +457,40 @@ function bindView() {
     const { x, y } = toPageCoords(e);
     sendInput({ kind: 'click', x, y, clickCount: e.detail || 1 });
     $('viewKeys').focus();
+  });
+
+  // الصورة ليست حقل إدخال، فنجعلها قابلة للتركيز لتستقبل حدث اللصق
+  img.setAttribute('tabindex', '0');
+
+  for (const el of [img, $('viewKeys')]) {
+    el.addEventListener('paste', (e) => {
+      const text = e.clipboardData && e.clipboardData.getData('text');
+      if (!text) return;
+      e.preventDefault();
+      if (el.id === 'viewKeys') el.value = '';
+      sendInput({ kind: 'text', text });
+      toast('لُصق داخل الصفحة', 'ok');
+    });
+  }
+
+  // ⌘V في أي مكان والعرض مفتوح — ما لم يكن المستخدم يكتب في حقول الأداة نفسها
+  const OWN_FIELDS = ['url', 'refererUrl', 'trimFrom', 'trimTo', 'newUserName', 'setDir', 'setConc', 'setFrag'];
+  document.addEventListener('paste', (e) => {
+    if ($('viewWrap').hidden) return;
+    const ae = document.activeElement;
+    if (ae && OWN_FIELDS.includes(ae.id)) return;
+    const text = e.clipboardData && e.clipboardData.getData('text');
+    if (!text) return;
+    e.preventDefault();
+    if (ae && ae.id === 'viewKeys') ae.value = '';
+    sendInput({ kind: 'text', text });
+    toast('لُصق داخل الصفحة', 'ok');
+  });
+
+  // بدون هذا تظهر قائمة الصور (فتح/حفظ الصورة) بدل ما يتوقّعه المستخدم
+  img.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    toast('استخدم زر «لصق» بالأعلى، أو ⌘V بعد النقر داخل الشاشة');
   });
 
   img.addEventListener('wheel', (e) => {
@@ -789,6 +844,7 @@ function bind() {
   $('btnAnalyze').addEventListener('click', analyze);
   $('btnSniff').addEventListener('click', startSniff);
   $('btnSniffStop').addEventListener('click', stopSniff);
+  $('btnPasteView').addEventListener('click', pasteIntoPage);
   $('btnDownload').addEventListener('click', () => download());
   $('btnFormats').addEventListener('click', renderFormats);
   $('btnClear').addEventListener('click', async () => {
