@@ -189,6 +189,26 @@ function baseArgs(opts = {}) {
 }
 
 /**
+ * يحدّد ملف الكوكيز المستخدَم في الطلب.
+ *
+ * ‎--cookies-from-browser‎ يقرأ قاعدة كوكيز متصفح الجهاز الذي يشغّل الخادم.
+ * هذا صحيح محليًا، لكنه بلا معنى على خادم بعيد لا متصفح لمستخدمٍ فيه —
+ * فهناك نستخدم كوكيز المتصفح المدمج الذي سجّل المستخدم دخوله فيه.
+ */
+async function resolveCookieFile(body, sniffer) {
+  if (body.cookieFile) return body.cookieFile;
+  if (!body.useSniffCookies) return null;
+  const target = body.url || (Array.isArray(body.urls) ? body.urls[0] : null);
+  const file = await sniffer.exportCookies(target);
+  if (!file) {
+    throw new Error(
+      'لا توجد جلسة متصفح بعد. اضغط «استخراج من الموقع»، سجّل دخولك في الشاشة، ثم أعد المحاولة.'
+    );
+  }
+  return file;
+}
+
+/**
  * يبني ترويسة Cookie من ملف Netscape للمضيف المطلوب.
  *
  * لماذا: عند تنزيل بث HLS يسلّم yt-dlp المهمة إلى ffmpeg، لكنه ينقل ترويسة
@@ -527,6 +547,9 @@ function friendlyError(stderr) {
     return 'يلزم تثبيت ffmpeg لدمج الصوت والصورة. نفّذ: brew install ffmpeg';
   if (s.includes('sign in to confirm') || s.includes('confirm your age') || s.includes('login required') || s.includes('private video'))
     return 'الفيديو يتطلّب تسجيل دخول — فعّل خيار «استخدام كوكيز المتصفح» واختر متصفحك.';
+  if (s.includes('could not find') && s.includes('cookies database')) {
+    return 'لا يوجد متصفح بملف تعريف على هذا الخادم. استخدم «استخراج من الموقع» وسجّل دخولك في الشاشة المدمجة بدل خيار كوكيز المتصفح.';
+  }
   if (s.includes('unsupported url'))
     return 'هذه الصفحة لا تحتوي على فيديو في مصدرها — غالبًا موقع يبني محتواه بجافاسكربت بعد تسجيل الدخول. '
       + 'افتح الدرس في المتصفح، ثم أدوات المطوّر (⌥⌘I) ← تبويب Network ← اكتب m3u8 أو mp4 في الفلتر، '
@@ -1078,7 +1101,13 @@ const server = http.createServer(async (req, res) => {
       const target = String(body.url || '').trim();
       if (!isHttpUrl(target)) return sendJSON(res, 400, { error: 'رابط غير صالح' });
 
-      const args = [...baseArgs(body), '-J'];
+      const cookieFile = await resolveCookieFile(body, sniffer);
+      if (IS_REMOTE && body.cookiesBrowser && !cookieFile) {
+        return sendJSON(res, 400, {
+          error: 'خيار كوكيز متصفح جهازك لا يعمل على الخادم. استخدم «استخراج من الموقع» وسجّل دخولك في الشاشة.',
+        });
+      }
+      const args = [...baseArgs({ ...body, cookieFile }), '-J'];
       args.push(body.playlist ? '--flat-playlist' : '--no-playlist');
       args.push('--', target);
 
@@ -1126,6 +1155,12 @@ const server = http.createServer(async (req, res) => {
       const valid = urls.filter(isHttpUrl);
       if (!valid.length) return sendJSON(res, 400, { error: 'لا يوجد رابط صالح' });
 
+      const enqueueCookieFile = await resolveCookieFile(body, sniffer);
+      if (IS_REMOTE && body.cookiesBrowser && !enqueueCookieFile) {
+        return sendJSON(res, 400, {
+          error: 'خيار كوكيز متصفح جهازك لا يعمل على الخادم. استخدم «استخراج من الموقع» وسجّل دخولك في الشاشة.',
+        });
+      }
       await fsp.mkdir(myDir, { recursive: true });
 
       const created = [];
@@ -1157,7 +1192,7 @@ const server = http.createServer(async (req, res) => {
             embedSubs: body.embedSubs !== false,
             subLangs: body.subLangs || 'ar.*,en.*',
             cookiesBrowser: body.cookiesBrowser || null,
-            cookieFile: body.cookieFile || null,
+            cookieFile: enqueueCookieFile,
             outputTitle: body.outputTitle || null,
             referer: body.referer || null,
             sectionFrom: body.sectionFrom || null,

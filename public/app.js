@@ -51,6 +51,17 @@ function fmtEta(sec) {
   return `${nf(sec / 3600, 1)} س`;
 }
 
+/**
+ * على الخادم لا يوجد متصفح لمستخدم، فخيار «كوكيز المتصفح» يفشل حتمًا.
+ * هناك نستعمل كوكيز المتصفح المدمج الذي سجّل المستخدم دخوله فيه.
+ */
+function cookieOpts() {
+  if (!$('optCookies').checked) return {};
+  return health.remote
+    ? { useSniffCookies: true }
+    : { cookiesBrowser: $('cookiesBrowser').value };
+}
+
 const isRTL = (s) => /[؀-ۿ]/.test(String(s || ''));
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -88,6 +99,17 @@ async function loadHealth() {
     ? `<span class="chip">ffmpeg</span>`
     : `<span class="chip bad">ffmpeg مفقود</span>`);
   $('chips').innerHTML = chips.join('');
+
+  if (health.remote) {
+    const lbl = document.querySelector('label[for="cookiesBrowser"]');
+    const sel = $('cookiesBrowser');
+    const span = $('optCookies').parentElement.querySelector('span');
+    if (span) span.textContent = 'كوكيز متصفح الأداة';
+    if (sel) sel.hidden = true;
+    if (lbl) lbl.textContent = 'يستخدم جلستك في «استخراج من الموقع» — سجّل دخولك هناك أولًا.';
+    const hint = $('cookiesRow').querySelector('.muted');
+    if (hint) hint.textContent = 'لا يوجد متصفح لمستخدم على الخادم، فكوكيز جهازك غير متاحة هنا.';
+  }
 
   if (!health.ytdlp) showError('yt-dlp غير مثبّت. نفّذ في الطرفية:  pip install -U yt-dlp');
   else if (!health.ffmpeg) toast('ffmpeg غير مثبّت — الجودات العالية قد لا تُدمج. نفّذ: brew install ffmpeg', 'error');
@@ -128,7 +150,7 @@ async function analyze() {
     info = await api('/api/info', {
       url: list[0],
       playlist: $('optPlaylist').checked,
-      cookiesBrowser: $('optCookies').checked ? $('cookiesBrowser').value : null,
+      ...cookieOpts(),
       referer: $('optReferer').checked ? ($('refererUrl').value.trim() || null) : null,
     });
     renderPreview();
@@ -261,7 +283,7 @@ function collectOptions(extra = {}) {
     playlist: $('optPlaylist').checked,
     subs: $('optSubs').checked,
     embedSubs: true,
-    cookiesBrowser: $('optCookies').checked ? $('cookiesBrowser').value : null,
+    ...cookieOpts(),
     referer: $('optReferer').checked ? ($('refererUrl').value.trim() || null) : null,
     sectionFrom: $('optTrim').checked ? ($('trimFrom').value.trim() || null) : null,
     sectionTo: $('optTrim').checked ? ($('trimTo').value.trim() || null) : null,
