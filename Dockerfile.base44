@@ -1,0 +1,18 @@
+# Base44 development image — system dependencies only.
+# The application source is bind-mounted at runtime (see docker-compose.base44.yml),
+# so edits are picked up without rebuilding this image.
+FROM node:22-bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      python3 python3-pip ffmpeg chromium ca-certificates \
+      fonts-liberation fonts-noto-core fonts-noto-cjk \
+ && pip3 install --break-system-packages --no-cache-dir -U yt-dlp \
+ && apt-get purge -y python3-pip \
+ && apt-get autoremove -y \
+ && rm -rf /var/lib/apt/lists/*
+
+ENV CHROME_BIN=/usr/bin/chromium \
+    NO_OPEN=1 \
+    DAWN_DIR=/data
+
+WORKDIR /app

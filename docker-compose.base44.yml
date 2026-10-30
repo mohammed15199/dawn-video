@@ -1,0 +1,43 @@
+services:
+  dawn:
+    build:
+      context: .
+      dockerfile: Dockerfile.base44
+    # Sandbox placeholders first, dashboard secrets last (they must win).
+    env_file:
+      - ./.env.base44-defaults
+      - /run/base44/app.env
+    environment:
+      - HOST=0.0.0.0
+      - PORT=5178
+      - DAWN_DIR=/data
+      - DAWN_STATE_DIR=/data
+      - CHROME_BIN=/usr/bin/chromium
+      - NO_OPEN=1
+      - BASE44_PREVIEW_MODE
+    ports:
+      - "3000:5178"
+    volumes:
+      # Live source: edits in the repo are served without an image rebuild.
+      - .:/app
+      # Downloads, users.json and browser profiles survive container restarts.
+      - dawn-data:/data
+    command: ["node", "server.js"]
+    restart: on-failure
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:5178/login').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    labels:
+      base44.project: "Dawn Video"
+      base44.kind: web
+      base44.port: 3000
+
+volumes:
+  dawn-data:
